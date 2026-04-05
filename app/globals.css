@@ -19,6 +19,11 @@
   }
 }
 
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -28,5 +33,10 @@ body {
 @layer utilities {
   .flex-center {
     @apply flex items-center justify-center;
+  }
+
+  .nav-text {
+    @apply cursor-pointer text-white/60 hover:text-white transition-all
+    duration-300;
   }
 }

@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { Pool } from "pg";
+import { nextCookies } from "better-auth/next-js";
 
 export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
@@ -17,4 +18,5 @@ export const auth = betterAuth({
       prompt: "select_account"
     }
   },
+  plugins: [nextCookies()] 
 });
