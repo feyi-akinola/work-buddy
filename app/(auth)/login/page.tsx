@@ -1,8 +1,9 @@
 import { auth } from "@/lib/auth";
 import { signInAction } from "../../actions/auth";
-import Button from "@/components/Button";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import AuthSubmitButton from "@/components/AuthSubmitButton";
+import GoogleAuthButton from "@/components/GoogleAuthButton";
 
 export default async function SignIn() {
   const session = await auth.api.getSession({
@@ -37,10 +38,10 @@ export default async function SignIn() {
               focus:ring-zinc-300 transition-all"
           />
 
-          <button type="submit" className="mt-2">
-            <Button text="Sign In" />
-          </button>
+          <AuthSubmitButton idleText="Sign In" pendingText="Signing In..." />
         </form>
+
+        <GoogleAuthButton label="Sign in with Google" />
       </div>
     </div>
   );
