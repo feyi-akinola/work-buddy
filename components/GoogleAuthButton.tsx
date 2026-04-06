@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
+import { FcGoogle } from "react-icons/fc";
 
 type GoogleAuthButtonProps = {
   label?: string;
@@ -28,9 +29,10 @@ const GoogleAuthButton = ({ label = "Continue with Google" }: GoogleAuthButtonPr
       type="button"
       onClick={handleGoogleLogin}
       disabled={loading}
-      className="w-full px-4 py-3 rounded-xl bg-zinc-900 text-white ring-2 ring-zinc-800 outline-none
-      hover:ring-zinc-500 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+      className="flex-center gap-4 w-full px-4 py-3 rounded-xl bg-zinc-900 text-white ring-2 ring-zinc-800 outline-none
+      hover:ring-zinc-500 transition-all disabled:opacity-70 disabled:cursor-not-allowed text-lg font-semibold cursor-pointer"
     >
+      <FcGoogle size={36} />
       {loading ? "Redirecting..." : label}
     </button>
   );

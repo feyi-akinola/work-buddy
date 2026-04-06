@@ -5,10 +5,20 @@ import { redirect } from "next/navigation";
 import AuthSubmitButton from "@/components/AuthSubmitButton";
 import GoogleAuthButton from "@/components/GoogleAuthButton";
 
-export default async function SignUp() {
+type SignUpProps = {
+  searchParams?: Promise<{ error?: string }> | { error?: string };
+};
+
+export default async function SignUp({ searchParams }: SignUpProps) {
   const session = await auth.api.getSession({
     headers: await headers(),
   });
+  const params = searchParams
+    ? "then" in searchParams
+      ? await searchParams
+      : searchParams
+    : undefined;
+  const error = params?.error;
 
   if (session) {
     return redirect("/");
@@ -16,8 +26,13 @@ export default async function SignUp() {
 
   return (
     <div className="h-screen w-screen flex-center bg-black">
-      <div className="w-[460px] flex flex-col gap-14 p-6">
+      <div className="w-[460px] flex flex-col gap-12 p-6">
         <h2 className="text-4xl font-bold text-white text-center">Create An Account</h2>
+        {error ? (
+          <p className="text-red-400 text-sm text-center bg-red-950/40 border border-red-900 rounded-lg p-2">
+            {error}
+          </p>
+        ) : null}
 
         <form action={signUpAction} className="flex flex-col gap-5 w-full">
           <input
