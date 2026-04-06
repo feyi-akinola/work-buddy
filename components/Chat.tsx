@@ -19,6 +19,7 @@ type ChatProps = {
 }
 
 const useSessionId = () => useMemo(() => crypto.randomUUID(), []);
+const AI_COMMAND_REGEX = /^@ai\b/i;
 
 const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
   const PAGE_SIZE = 20;
@@ -174,10 +175,35 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
     }
   };
 
+  const buildAiHistory = useCallback(
+    (latestUserInput: string) => {
+      const recent = [...messages, {
+        id: "pending-user-message",
+        content: latestUserInput,
+        created_at: new Date().toISOString(),
+        sender_id: userId,
+        room_id: selectedRoom ?? "",
+        message_type: 1 as const,
+        role: 1 as const,
+      }]
+        .filter((msg) => !("sending" in msg && msg.sending))
+        .slice(-10);
+
+      return recent.map((msg) => ({
+        role: msg.role === 2 ? "assistant" : "user",
+        content: msg.content,
+      }));
+    },
+    [messages, selectedRoom, userId]
+  );
+
   const sendMessage = async () => {
     if (!input.trim() || !selectedRoom) return;
     
-    const content = input;
+    const content = input.trim();
+    const isAiCommand = AI_COMMAND_REGEX.test(content);
+    const aiPrompt = content.replace(AI_COMMAND_REGEX, "").trim();
+    if (isAiCommand && !aiPrompt) return;
     setInput("");
 
     // --- CRITICAL FIX: Tell everyone I stopped typing FIRST ---
@@ -211,6 +237,92 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
 
     if (data) {
       setMessages(prev => prev.map(msg => msg.id === tempId ? data : msg));
+    }
+
+    if (isAiCommand) {
+      const history = buildAiHistory(content);
+      const aiTempId = `ai-temp-${crypto.randomUUID()}`;
+      const aiOptimisticMessage: TempMessage = {
+        id: aiTempId,
+        content: "",
+        created_at: new Date().toISOString(),
+        sender_id: userId,
+        role: 2,
+        room_id: selectedRoom,
+        message_type: 1,
+        sending: true,
+      };
+      setMessages(prev => [...prev, aiOptimisticMessage]);
+
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: aiPrompt,
+            roomId: selectedRoom,
+            userId,
+            history,
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.id === aiTempId
+                ? {
+                    ...msg,
+                    content: "AI request failed. Please try again.",
+                    sending: false,
+                  }
+                : msg
+            )
+          );
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.id === aiTempId
+                ? { ...msg, content: accumulated, sending: false }
+                : msg
+            )
+          );
+        }
+
+        const finalChunk = decoder.decode();
+        if (finalChunk) {
+          accumulated += finalChunk;
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.id === aiTempId
+                ? { ...msg, content: accumulated, sending: false }
+                : msg
+            )
+          );
+        }
+      } catch (error) {
+        console.error("Failed to trigger AI response", error);
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === aiTempId
+              ? {
+                  ...msg,
+                  content: "AI request failed. Please try again.",
+                  sending: false,
+                }
+              : msg
+          )
+        );
+      }
     }
   };
 
@@ -256,7 +368,22 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
           }
 
           setMessages((current) => {
-            if (current.some(msg => msg.id === newMessage.id) || newMessage.sender_id === userId) return current;
+            if (current.some(msg => msg.id === newMessage.id)) return current;
+
+            const aiTempIndex = current.findIndex(
+              msg =>
+                String(msg.id).startsWith("ai-temp-") &&
+                msg.role === 2 &&
+                msg.sender_id === newMessage.sender_id &&
+                msg.room_id === newMessage.room_id
+            );
+            if (newMessage.role === 2 && aiTempIndex !== -1) {
+              const next = [...current];
+              next[aiTempIndex] = newMessage;
+              return next;
+            }
+
+            if (newMessage.sender_id === userId && newMessage.role !== 2) return current;
             return [...current, newMessage];
           });
         }
@@ -313,7 +440,7 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
                 <ChatBubble 
                   key={message.id} 
                   message={message} 
-                  isSent={message.sender_id === userId} 
+                  isSent={message.sender_id === userId && message.role !== 2} 
                 />
               ))}
             </div>

@@ -4,8 +4,8 @@ export type Message = {
   created_at: string;
   sender_id: string;
   room_id: string;
-  message_type: 0 | 1;
-  role: 0 | 1;
+  message_type: 1 | 2;
+  role: 1 | 2;
 }
 
 export type TempMessage = Message & {
