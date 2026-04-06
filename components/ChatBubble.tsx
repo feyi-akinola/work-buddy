@@ -1,21 +1,72 @@
+ "use client";
 import { timeAgo } from "@/lib/time";
 import { Message } from "@/types/types";
 import { BeatLoader } from "react-spinners";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bot } from "lucide-react";
+import { Bot, Play, Square } from "lucide-react";
+import { ComponentPropsWithoutRef, useCallback, useEffect, useMemo, useState } from "react";
 
 type ChatBubbleProps = {
   message: Message & { sending?: boolean };
   isSent: boolean;
+  senderName?: string;
 }
 
-const ChatBubble = ({ message, isSent } : ChatBubbleProps) => {
+type MarkdownCodeProps = ComponentPropsWithoutRef<"code"> & {
+  inline?: boolean;
+};
+
+const ChatBubble = ({ message, isSent, senderName } : ChatBubbleProps) => {
   const alignment: string = isSent ? "end" : "start";
   const isAiMessage = message.role === 2;
   const bgColor: string = isSent ? "#FFFFFF" : isAiMessage ? "#dff7ff" : "#bff5ff";
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const { created_at, content, sending } = message; 
+  const isVoiceMessage = message.message_type === 2;
+
+  const speechText = useMemo(
+    () =>
+      content
+        .replace(/```[\s\S]*?```/g, "")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+        .replace(/[*_>#-]/g, "")
+        .trim(),
+    [content]
+  );
+
+  const toggleSpeech = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (!("speechSynthesis" in window)) return;
+
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      return;
+    }
+
+    if (!speechText) return;
+
+    const utterance = new SpeechSynthesisUtterance(speechText);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+    setIsSpeaking(true);
+  }, [isSpeaking, speechText]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    return () => {
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   return (
     <div
@@ -23,14 +74,25 @@ const ChatBubble = ({ message, isSent } : ChatBubbleProps) => {
         alignSelf: alignment,
         alignItems:  alignment,
       }}
-      className="flex flex-col gap-1"
+      className="flex flex-col gap-1.5 max-w-[78%]"
     >
       { 
         sending
           ? <BeatLoader size={8} color="#CFCFCF"/>
           : (
-              <p className="text-xs font-semibold text-zinc-700">
-                {timeAgo(created_at)}
+              <p className="text-xs font-semibold text-zinc-600">
+                {
+                  isAiMessage
+                    ? timeAgo(created_at)
+                    : (
+                      <>
+                        <span className="text-white/70 font-semibld">
+                          {`${senderName ?? "User"}`}
+                        </span>
+                        {` • ${timeAgo(created_at)}`}
+                      </>
+                      )
+                }
               </p>
             )
       }
@@ -40,11 +102,21 @@ const ChatBubble = ({ message, isSent } : ChatBubbleProps) => {
           backgroundColor: bgColor,
         }}
         className="bg-white/80 text-black/80 rounded-2xl px-6 py-3 flex gap-2">
-        {isAiMessage ? (
+        {isVoiceMessage ? (
+          <audio controls src={content} className="w-full min-w-[220px]" />
+        ) : isAiMessage ? (
           <div className="flex flex-col gap-4">
             <div className="flex justify-center items-center bg-black/20 rounded-full p-2 gap-2">
               <Bot />
               <p className="font-semibold">Assistant</p>
+              <button
+                type="button"
+                onClick={toggleSpeech}
+                className="ml-1 p-1 rounded-full hover:bg-black/20 transition-colors"
+                aria-label={isSpeaking ? "Stop AI speech" : "Play AI speech"}
+              >
+                {isSpeaking ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              </button>
             </div>
 
             <div className="text-sm font-medium w-full max-w-none">
@@ -57,7 +129,7 @@ const ChatBubble = ({ message, isSent } : ChatBubbleProps) => {
                   ul: ({ children }) => <ul className="list-disc pl-5 my-2">{children}</ul>,
                   ol: ({ children }) => <ol className="list-decimal pl-5 my-2">{children}</ol>,
                   li: ({ children }) => <li className="my-1">{children}</li>,
-                  code: ({ className, children, ...props }: any) => {
+                  code: ({ className, children, ...props }: MarkdownCodeProps) => {
                     const language = className?.replace("language-", "") || "";
                     const codeText = String(children ?? "");
                     const isBlock = Boolean(language) || codeText.includes("\n");

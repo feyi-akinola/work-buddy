@@ -1,14 +1,16 @@
 "use client";
-import { Mic, Send } from "lucide-react";
+import { Mic, Send, Square } from "lucide-react";
 import ChatButton from "./ChatButton";
 import { useMemo, Dispatch, ReactElement, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import ChatBubble from "./ChatBubble";
 import { Message, TempMessage } from "@/types/types";
 import { BeatLoader, PuffLoader } from "react-spinners";
+import { RealtimeChannel } from "@supabase/supabase-js";
 
 const icons: Record<string, ReactElement> = {
   mic: <Mic className="text-white/70 w-5 h-5"/>,
+  micRecording: <Square className="text-red-400 w-5 h-5"/>,
   send: <Send className="text-white/70 w-5 h-5"/>
 };
 
@@ -16,12 +18,19 @@ type ChatProps = {
   selectedRoom: string | undefined;
   setSelectedRoom: Dispatch<SetStateAction<string | undefined>>;
   userId: string;
+  userName: string;
 }
+
+type TypingPresence = {
+  user?: string;
+  typing?: boolean;
+  ts?: number;
+};
 
 const useSessionId = () => useMemo(() => crypto.randomUUID(), []);
 const AI_COMMAND_REGEX = /^@ai\b/i;
 
-const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
+const Chat = ({ selectedRoom, setSelectedRoom, userId, userName } : ChatProps) => {
   const PAGE_SIZE = 20;
   const TYPING_IDLE_MS = 3000;
   const TYPING_STALE_MS = 5000;
@@ -36,14 +45,19 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
   const [page, setPage] = useState<number>(0);
   const [input, setInput] = useState<string>("");
   const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [senderNames, setSenderNames] = useState<Record<string, string>>({});
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const channelRef = useRef<any>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
   const prevHeightRef = useRef(0);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isTypingRef = useRef(false);
   const lastTypingTrackRef = useRef(0);
   const suppressOtherTypingUntilRef = useRef(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   // --- HELPERS ---
 
@@ -85,10 +99,10 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
       return;
     }
 
-    const anyoneElseTyping = Object.entries(state).some(([key, presenceList]: [string, any]) => {
+    const anyoneElseTyping = Object.entries(state).some(([key, presenceList]) => {
       if (key === presenceKey) return false;
 
-      return presenceList.some((p: any) => {
+      return (presenceList as TypingPresence[]).some((p) => {
         const ts = typeof p.ts === "number" ? p.ts : 0;
         const isFresh = now - ts <= TYPING_STALE_MS;
         return p.user !== userId && p.typing === true && isFresh;
@@ -128,7 +142,7 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
     }
   };
 
-  const fetchMessages = async (pageNumber: number) => {
+  const fetchMessages = useCallback(async (pageNumber: number) => {
     if (!selectedRoom) return;
     setLoading(true);
 
@@ -162,7 +176,7 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedRoom, scrollToBottom]);
 
   const handleScroll = () => {
     const el = containerRef.current;
@@ -175,6 +189,100 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
     }
   };
 
+  const blobToDataUrl = useCallback((blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }, []);
+
+  const sendVoiceMessage = useCallback(async (audioDataUrl: string) => {
+    if (!selectedRoom) return;
+
+    const tempId = `voice-temp-${crypto.randomUUID()}`;
+    const optimisticVoiceMessage: TempMessage = {
+      id: tempId,
+      content: audioDataUrl,
+      created_at: new Date().toISOString(),
+      sender_id: userId,
+      role: 1,
+      room_id: selectedRoom,
+      message_type: 2,
+      sending: true,
+    };
+    setMessages(prev => [...prev, optimisticVoiceMessage]);
+
+    const { data } = await supabase
+      .from("message")
+      .insert({
+        room_id: selectedRoom,
+        content: audioDataUrl,
+        sender_id: userId,
+        role: 1,
+        message_type: 2,
+      })
+      .select()
+      .single();
+
+    if (data) {
+      setMessages(prev => prev.map(msg => (msg.id === tempId ? data : msg)));
+    } else {
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
+    }
+  }, [selectedRoom, userId]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+    setIsRecording(false);
+  }, []);
+
+  const handleMicClick = useCallback(async () => {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    try {
+      stopTyping();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        try {
+          const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+          if (audioBlob.size === 0) return;
+          const audioDataUrl = await blobToDataUrl(audioBlob);
+          await sendVoiceMessage(audioDataUrl);
+        } catch (error) {
+          console.error("Failed to send voice message", error);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Microphone access failed", error);
+      setIsRecording(false);
+    }
+  }, [blobToDataUrl, isRecording, sendVoiceMessage, stopRecording, stopTyping]);
+
   const buildAiHistory = useCallback(
     (latestUserInput: string) => {
       const recent = [...messages, {
@@ -186,6 +294,7 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
         message_type: 1 as const,
         role: 1 as const,
       }]
+        .filter((msg) => msg.message_type === 1)
         .filter((msg) => !("sending" in msg && msg.sending))
         .slice(-10);
 
@@ -345,7 +454,7 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
     setHasMore(true);
     setIsOtherTyping(false);
     fetchMessages(0);
-  }, [selectedRoom]);
+  }, [selectedRoom, fetchMessages]);
 
   // Realtime Logic
   useEffect(() => {
@@ -416,9 +525,57 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
       scrollToBottom("smooth");
     }
   }, [messages, isOtherTyping, loading, page, scrollToBottom]);
+
+  useEffect(() => {
+    const nonAiSenderIds = Array.from(
+      new Set(
+        messages
+          .filter(msg => msg.role !== 2)
+          .map(msg => msg.sender_id)
+          .filter(Boolean)
+      )
+    );
+    const missingIds = nonAiSenderIds.filter(
+      id => id !== userId && !senderNames[id]
+    );
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    const loadNames = async () => {
+      const { data } = await supabase
+        .from("user")
+        .select("id,name")
+        .in("id", missingIds);
+
+      if (cancelled || !data) return;
+      setSenderNames(prev => {
+        const next = { ...prev };
+        data.forEach((u: { id: string; name: string }) => {
+          next[u.id] = u.name;
+        });
+        return next;
+      });
+    };
+
+    loadNames();
+    return () => {
+      cancelled = true;
+    };
+  }, [messages, senderNames, userId]);
+
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
   
   return (
-    <div className="flex-2 p-2 flex flex-col gap-4">
+    <div className="flex-2 min-h-0 p-2 flex flex-col gap-4">
       {loading && page === 0 ? (
         <div className="h-full flex-center">
           <PuffLoader color="#CFCFCF" loading={loading}/>
@@ -432,15 +589,22 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
           <div
             ref={containerRef}
             onScroll={handleScroll}
-            className="flex-1 overflow-y-auto flex flex-col p-1 scrollbar-hidden"
+            className="flex-1 min-h-0 overflow-y-auto flex flex-col p-1 scrollbar-hidden"
           >
             <div className="flex-1" /> 
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-6">
               {messages.map((message) => (
                 <ChatBubble 
                   key={message.id} 
                   message={message} 
-                  isSent={message.sender_id === userId && message.role !== 2} 
+                  isSent={message.sender_id === userId && message.role !== 2}
+                  senderName={
+                    message.role === 2
+                      ? undefined
+                      : message.sender_id === userId
+                        ? userName
+                        : senderNames[message.sender_id] ?? "Teammate"
+                  }
                 />
               ))}
             </div>
@@ -461,7 +625,7 @@ const Chat = ({ selectedRoom, setSelectedRoom, userId } : ChatProps) => {
               className="w-full outline-0 text-white/90 bg-transparent"
               placeholder="Write a message..."
             />
-            <ChatButton icon={icons.mic} />
+            <ChatButton icon={isRecording ? icons.micRecording : icons.mic} onClick={handleMicClick} />
             <ChatButton icon={icons.send} onClick={sendMessage}/>
           </div>
         </>

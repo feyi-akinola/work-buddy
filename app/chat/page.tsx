@@ -2,19 +2,22 @@
 import Chat from "@/components/Chat";
 import Sidebar from "@/components/Sidebar";
 import { signOutAction } from "../actions/auth";
-import { LogOut } from "lucide-react";
 import { useState } from "react";
 import { useUserStore } from "@/store/userStore";
+import SignOutSubmitButton from "@/components/SignOutSubmitButton";
 
 const ChatPage = () => {
   const { name: userName, id: userId } = useUserStore();
-  const clear = useUserStore(store => store.clear);
-  
   const [selectedRoom, setSelectedRoom] = useState<string | undefined>();
+  const [authError] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("error");
+  });
 
   return (
-    <main className="h-screen w-screen flex-center bg-zinc-50 font-sans dark:bg-black">
-      <div className="flex flex-col h-[90%] w-[90%]">
+    <main className="h-dvh w-screen flex-center bg-zinc-50 font-sans dark:bg-black overflow-hidden">
+      <div className="flex flex-col h-[95dvh] w-[90%] min-h-0">
         <div className="flex justify-between p-3">
           <p className="nav-text">
             {userName}
@@ -22,19 +25,19 @@ const ChatPage = () => {
           <form 
             className="nav-text flex-center gap-2" 
             action={async () => {
-              clear();
               await signOutAction();
             }}
           >
-            <button type="submit" className="cursor-pointer">
-              Sign Out
-            </button>
-
-            <LogOut className="w-5 h-5" />
+            <SignOutSubmitButton />
           </form>
         </div>
+        {authError ? (
+          <p className="text-red-400 text-sm text-center bg-red-950/40 border border-red-900 rounded-lg p-2 mb-2">
+            {authError}
+          </p>
+        ) : null}
 
-        <div className="w-full h-full flex ring-white/20 ring-2 rounded-3xl p-2">
+        <div className="w-full h-full min-h-0 flex ring-white/20 ring-2 rounded-3xl p-2 overflow-hidden">
           <Sidebar
             userId={userId}
             onSelectRoom={setSelectedRoom}
@@ -44,6 +47,7 @@ const ChatPage = () => {
             selectedRoom={selectedRoom}
             setSelectedRoom={setSelectedRoom}
             userId={userId}
+            userName={userName}
           />
         </div>
       </div>

@@ -41,7 +41,7 @@ const Sidebar = ({ currentRoomId, onSelectRoom, userId }: SidebarProps) => {
   };
 
   return (
-    <div className="flex-1 bg-white/10 rounded-3xl p-4 flex flex-col gap-4 border-r
+    <div className="flex-1 min-h-0 bg-white/10 rounded-3xl p-4 flex flex-col gap-4 border-r
       border-white/5">
       <div className="flex-1 overflow-y-auto flex flex-col gap-2">
         {
